@@ -210,11 +210,31 @@ static void drum_intr_transfer_cb(egc_usb_transfer_t *transfer)
     iinepm_drum_request_data(device);
 }
 
+static void iinepm_drum_init_cb(egc_usb_transfer_t *transfer)
+{
+    egc_input_device_t *device = transfer->device;
+
+    if (transfer->status == EGC_USB_TRANSFER_STATUS_COMPLETED) {
+        printf("initialization completed successfully\n");
+    } else {
+        printf("initialization failed with status: %d\n", transfer->status);
+    }
+
+    // Start requesting data regardless of init result
+    iinepm_drum_request_data(device);
+}
+
 static int iinepm_drum_request_data(egc_input_device_t *device)
 {
     const egc_usb_transfer_t *transfer = egc_device_driver_issue_intr_transfer_async(
-        device, EGC_USB_ENDPOINT_IN | 1, NULL, sizeof(struct iinepm_drum_input_report), drum_intr_transfer_cb);
-    return transfer != NULL ? 0 : -1;
+        device, EGC_USB_ENDPOINT_IN | 1, NULL, 0, drum_intr_transfer_cb);
+
+    if (transfer == NULL) {
+        printf("Failed to issue USB interrupt transfer\n");
+        return -1;
+    }
+
+    return 0;
 }
 
 static bool iinepm_drum_driver_ops_probe(u16 vid, u16 pid)
@@ -240,12 +260,33 @@ static int iinepm_drum_driver_ops_init(egc_input_device_t *device, u16 vid, u16 
 
 static bool iinepm_drum_driver_ops_timer(egc_input_device_t *device)
 {
-    iinepm_drum_request_data(device);
+    const egc_usb_transfer_t *transfer = egc_device_driver_issue_ctrl_transfer_async(
+        device,
+        EGC_USB_CTRLTYPE_DIR_DEVICE2HOST | EGC_USB_CTRLTYPE_TYPE_CLASS | EGC_USB_CTRLTYPE_REC_INTERFACE,
+        EGC_USB_REQ_GETREPORT,
+        (EGC_USB_REPTYPE_INPUT << 8) | 0x00,
+        0,
+        NULL,
+        0,
+        iinepm_drum_init_cb);
+
+    if (transfer == NULL) {
+        printf("Failed to issue Xbox 360 initialization transfer\n");
+        // Still try to start data requests
+        return iinepm_drum_request_data(device);
+    }
     return false;
+}
+
+static int iinepm_drum_driver_ops_disconnect(egc_input_device_t *device)
+{
+    printf("Device disconnected\n");
+    return 0;
 }
 
 const egc_device_driver_t iine_pro_max_device_driver = {
     .probe = iinepm_drum_driver_ops_probe,
     .init = iinepm_drum_driver_ops_init,
+    .disconnect = iinepm_drum_driver_ops_disconnect,
     .timer = iinepm_drum_driver_ops_timer,
 };
